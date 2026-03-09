@@ -1,0 +1,25 @@
+# python
+__pycache__/
+
+# virtual environment
+venv/
+
+# notebook checkpoints
+.ipynb_checkpoints/
+
+# system files
+.DS_Store
+
+# datasets
+data/*.csv
+data/*.parquet
+
+# models
+models/*.pkl
+models/*.joblib
+
+# submissions
+submissions/*.csv
+
+# catboost logs
+catboost_info/
