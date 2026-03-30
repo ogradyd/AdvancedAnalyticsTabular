@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \":*)",
+      "Bash(python3:*)",
+      "Bash(MAIN=\"/Users/lowievanlitsenborg/Library/Mobile Documents/com~apple~CloudDocs/lessen/1e Ma/Advanced Analytics/Assignments/1/AdvancedAnalyticsTabular\" WT=\"$MAIN/.claude/worktrees/laughing-swartz\" __NEW_LINE_9f30546551a8412a__ ln -s \"$MAIN/data\" \"$WT/data\" ln -s \"$MAIN/models\" \"$WT/models\" ln -s \"$MAIN/submissions\" \"$WT/submissions\" __NEW_LINE_9f30546551a8412a__ echo \"Symlinks created:\" ls -la \"$WT\")",
+      "Bash(pip install:*)"
+    ]
+  }
+}
