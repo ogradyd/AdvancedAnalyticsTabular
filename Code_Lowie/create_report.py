@@ -143,7 +143,7 @@ add_para("Data:", space_after=3)
 add_bullet("Training set: ~116,000 customers with known 2018–2019 revenue labels")
 add_bullet("Test set: ~29,000 customers (no labels)")
 add_bullet("Transaction data: ~1.2 M rows covering 2016–2017")
-add_bullet("Key challenge: ~80% of customers churned (revenue = 0 in 2018–2019), "
+add_bullet("Key challenge: 63.4% of customers churned (revenue = 0 in 2018–2019), "
            "making this a highly zero-inflated regression problem")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -265,8 +265,59 @@ add_bullet("60 trials for LightGBM and XGBoost, 40 for CatBoost (slower per tria
 add_bullet("3-fold CV inside Optuna (fast proxy); full 5-fold OOF with winning params")
 add_bullet("Wider search ranges: learning_rate 0.005–0.15 (log), n_estimators 300–3000, "
            "num_leaves 20–300, reg_alpha/lambda 1e-8 to 10 (log), XGBoost adds gamma parameter")
-add_para("Expected impact: 0.5–1.5 MAE points. The gap to the professor benchmark is ~1.35 MAE, "
-         "consistent with a hyperparameter tuning improvement.", bold_prefix="Expected impact:")
+add_para("Results: MAE 62.45 / Spearman 0.3729 (OOF). All three algorithms converged to the same "
+         "score — LightGBM 62.58, XGBoost 62.73, CatBoost 62.50, ensemble 62.45. Three independent "
+         "algorithms returning the same MAE despite very different hyperparameters is a diagnostic "
+         "signal: the bottleneck is not hyperparameters, it is the information available in the "
+         "features. The model cannot cleanly separate churners from returners because their "
+         "feature distributions overlap. More tuning will not close this gap.", bold_prefix="Results:")
+
+# 2.9
+add_heading("2.9  Two-Stage ML: Churn Classifier × Conditional Revenue  (Current)", 2)
+add_para("Root cause: 63.4% of training customers have exactly €0 revenue yet all single-stage "
+         "models predict a small positive number for nearly all of them. In log1p space the "
+         "churner target (log1p(0) = 0) and a low-revenue returner target sit very close "
+         "together — the decision boundary is inherently blurry. All three Optuna-tuned "
+         "algorithms converging to MAE ≈ 62.45 confirmed this is a feature-space ceiling, "
+         "not a hyperparameter problem.")
+add_para("Architecture:", space_after=3)
+add_bullet("Stage 1 — Churn classifier: LightGBM binary classifier trained on all customers, "
+           "all 80+ features. Target: is_returner = (revenue_2018_2019 > 0). "
+           "Output: P(customer returns in 2018–2019).",
+           bold_prefix="Stage 1 — Churn classifier:")
+add_bullet("Stage 2 — Conditional regressor: Optuna-tuned LightGBM regressor trained on "
+           "returning customers only. Target: log1p(revenue). "
+           "Output: E[revenue | customer is a returner].",
+           bold_prefix="Stage 2 — Conditional regressor:")
+add_bullet("Combination: prediction = P(return) × conditional_revenue.",
+           bold_prefix="Combination:")
+add_bullet("Optional threshold: an OOF-optimised revenue threshold that zeros out any "
+           "residual predictions below the break-even level, further reducing churner error.",
+           bold_prefix="Optional threshold:")
+
+add_para("Comparison to original two-stage (section 2.1):", space_after=4)
+make_table(
+    headers=["Dimension", "Original two-stage (2.1)", "New two-stage (2.9)"],
+    col_widths=[1.8, 2.7, 2.5],
+    rows=[
+        ["Classifier ensemble",   "LGB + XGB + CatBoost (3 models)",       "LGB only"],
+        ["Tuning metric",         "AUC — discriminative, not MAE-aligned",  "Binary crossentropy + MAE loss"],
+        ["Prob. calibration",     "Isotonic regression on 20% cal set",     "None (raw probabilities)"],
+        ["Class imbalance",       "Explicit scale_pos_weight",              "Not needed (soft ×, not threshold)"],
+        ["Decision rule",         "Hard: P > threshold → predict, else 0", "Soft: P × conditional_revenue"],
+        ["Feature set",           "customer_features.csv (~51 features)",  "customer_features_v3.csv (82 features)"],
+        ["Stage integration",     "Separate notebooks, separate splits —\ncombined MAE never properly measured",
+                                  "Both stages inside same 5-fold OOF —\ncombined MAE directly evaluated"],
+        ["Evaluation",            "AUC (classifier) + MAE (regressor) separately",
+                                  "Single OOF MAE for P × revenue product"],
+    ]
+)
+add_para("Key architectural improvement: The original two-stage never measured the end-to-end "
+         "MAE of the combined P × revenue prediction in a cross-validated way, because the "
+         "classifier and regressor lived in separate notebooks with separate train/val splits. "
+         "Running both stages inside the same OOF fold gives a single honest MAE that is "
+         "directly comparable to the single-stage baseline.")
+add_para("Results: Pending run.", bold_prefix="Results:")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. RESULTS SUMMARY
@@ -282,7 +333,8 @@ make_table(
         ["Single-stage + 82 features",          "~62.50", "~0.40",  "BG/NBD features included"],
         ["+ BG/NBD blend (alpha tuned)",        "~62.50", "~0.40",  "Minimal alpha improvement"],
         ["P_alive soft scaling",                "worse",  "—",      "Discarded: p_alive already a feature"],
-        ["Optuna optimised (current)",          "TBD",    "TBD",    "Expected best"],
+        ["Optuna HPO (LGB+XGB+CAT ensemble)",   "62.45",  "0.3729", "All 3 algorithms converged → feature ceiling"],
+        ["Two-stage ML (clf × regressor)",      "TBD",    "TBD",    "Run pending"],
         ["Professor benchmark",                 "61.146", "0.41",   "Target to beat"],
     ]
 )
@@ -358,7 +410,8 @@ make_table(
         ["03_churn_model.ipynb",
          "Old ML churn classifier (kept for reference, not in active pipeline)"],
         ["04_revenue_model.ipynb",
-         "Optuna HPO, 5-fold OOF, Nelder-Mead ensemble, soft scaling comparison, retrain, save"],
+         "Optuna HPO, 5-fold OOF, Nelder-Mead ensemble, soft scaling comparison, two-stage ML "
+         "(classifier × regressor, OOF-integrated), retrain all models, save"],
         ["05_test_prediction.ipynb",
          "Load best models, predict test set → submission_v7_*.csv"],
         ["06_interpretability.ipynb",
@@ -390,6 +443,15 @@ lessons = [
     ("RandomizedSearchCV is insufficient for 8+ interacting hyperparameters",
      "40 random trials cover a tiny fraction of a high-dimensional space. "
      "Optuna TPE makes each trial informative for the next."),
+    ("Algorithm convergence is a ceiling signal",
+     "When LightGBM, XGBoost, and CatBoost all return the same OOF MAE after independent "
+     "Optuna searches, further tuning will not help — the bottleneck is the feature space, "
+     "not the model. The right response is an architectural change, not more trials."),
+    ("OOF integration is critical for honest two-stage evaluation",
+     "The original two-stage used separate train/val splits for the classifier and regressor, "
+     "so the combined P × revenue MAE was never properly measured. Only by running both stages "
+     "inside the same OOF fold can the combined prediction be compared apples-to-apples "
+     "against a single-stage baseline."),
 ]
 
 for i, (title, body) in enumerate(lessons, 1):
