@@ -1,0 +1,425 @@
+---
+title: "EDA3: Features"
+output: html_notebook
+---
+
+```{r}
+# Libraries
+library(tidyverse)
+library(lubridate)
+library(skimr)
+```
+
+```{r}
+# Import from previous EDA notebook
+transactions <- readRDS("eda2_transactions_output.rds")
+revenue_1819_train <- read.csv("customer_clv_train.csv")
+```
+
+```{r}
+glimpse(transactions)
+```
+
+```{r}
+# This unique weird observation will make a big difference! :)
+transactions <- transactions %>%
+  mutate(prod_size = ifelse(prod_size == "XS", 16, prod_size))
+```
+
+```{r}
+# Some conversions
+transactions <- transactions %>%
+  mutate(
+    order_date = as.Date(order_date),
+    pack_date = as.Date(pack_date),
+    prod_size = as.numeric(prod_size), # Previously: one error: one "XS"
+    prod_web_only = as.logical(prod_web_only),
+    prod_outlet = as.logical(prod_outlet)
+  )
+```
+
+```{r}
+glimpse(transactions)
+```
+
+```{r}
+skim(transactions)
+```
+
+```{r}
+# Chunk 1: RFM Core Features
+
+last_day <- as.Date("2017-12-31")
+
+features_rfm <- transactions %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    days_since_last_order = as.numeric(last_day - max(order_date)),
+    
+    days_since_first_order = as.numeric(last_day - min(order_date)),
+    
+    n_orders = n_distinct(sale_id),
+    
+    n_items = n(),
+    
+    total_revenue = sum(sale_revenue),
+    
+    avg_order_value = total_revenue / n_orders,
+    
+    revenue_recency_ratio = 
+      total_revenue / (days_since_last_order + 1),
+    
+    frequency_recency_ratio = 
+      n_distinct(sale_id) / (days_since_last_order + 1)
+
+  )
+
+# Check it
+glimpse(features_rfm)
+```
+
+```{r}
+skim(features_rfm)
+```
+
+```{r}
+# Chunk 2: Frequency & Engagement Features
+
+features_frequency <- transactions %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    customer_lifetime_span = 
+      as.numeric(max(order_date) - min(order_date)),
+    
+    avg_days_between_orders = 
+      if_else(
+      n_distinct(sale_id) == 1,
+      -999,  # Sentinel: no gap observed, single-order customer
+      customer_lifetime_span / (n_distinct(sale_id) - 1)
+      ),
+    
+    months_active = n_distinct(format(order_date, "%Y-%m")),
+    
+    single_order_customer = (n_distinct(sale_id) == 1),
+    
+    avg_orders_per_day = 
+      if_else(
+        customer_lifetime_span == 0,
+        -999,
+        n_distinct(sale_id) / customer_lifetime_span
+        ),
+    
+    avg_items_per_day = 
+      if_else(
+        customer_lifetime_span == 0,
+        -999,
+        n() / customer_lifetime_span
+        ),
+    
+    avg_revenue_per_day = 
+      if_else(
+        customer_lifetime_span == 0,
+        -999,
+        sum(sale_revenue) / customer_lifetime_span
+        )
+    )
+
+glimpse(features_frequency)
+
+```
+
+```{r}
+skim(features_frequency)
+```
+
+```{r}
+# Chunk 3: Discount & Returns Behavior
+features_discount_returns <- transactions %>%
+    group_by(cust_id) %>%
+  
+    summarise(
+    pct_orders_with_discount = 
+    n_distinct(sale_id[discounted_item]) / n_distinct(sale_id),
+    
+    total_discount_received = sum(abs(sale_discount_applied)),
+    
+    all_items_discounted = all(discounted_item),
+    
+    all_orders_discounted = 
+      (n_distinct(sale_id[discounted_item]) == n_distinct(sale_id)),
+    
+    return_rate = sum(returned_item) / n(),
+    
+    n_returns = sum(returned_item),
+    
+    has_ever_returned = any(returned_item),
+    
+    #discount_per_item  = total_discount_received / n_items,
+    #discount_per_order = total_discount_received / n_orders
+    discount_per_item  = total_discount_received / n(),
+    discount_per_order = total_discount_received / n_distinct(sale_id)
+  )
+
+glimpse(features_discount_returns)
+```
+
+```{r}
+skim(features_discount_returns)
+```
+
+```{r}
+# Orders with discount: counts of percentages
+ggplot(features_discount_returns, 
+       aes(x = pct_orders_with_discount)) +
+  geom_histogram(binwidth = 0.05, color = "black") +
+  theme_bw() +
+  labs(x = "Frequency of orders with a discount")
+```
+
+```{r}
+# Chunk 4: Gap information
+
+transactions_sorted <- transactions %>%
+  distinct(cust_id, sale_id, order_date) %>%
+  arrange(cust_id, order_date) %>%
+  group_by(cust_id) %>%
+  mutate(
+    prev_order_date = lag(order_date),
+    days_between = as.numeric(order_date - prev_order_date)
+  )
+
+features_gaps <- transactions_sorted %>%
+  group_by(cust_id) %>%
+  summarise(
+    max_days_between_orders = {
+    valid_gaps <- days_between[!is.na(days_between)]
+    if(length(valid_gaps) == 0) -999 else max(valid_gaps)
+    }
+  )
+
+# Single order customers gets a -999 value
+glimpse(features_gaps)
+```
+
+```{r}
+skim(features_gaps)
+```
+
+```{r}
+transactions %>%
+  distinct(cust_id, sale_id, order_date) %>%
+  mutate(month = floor_date(order_date, "month")) %>%
+  count(month) %>%
+  ggplot(aes(x = month, y = n)) +
+  geom_col(color = "black") +
+  theme_bw() +
+  labs(x = "Month", y = "Number of Orders",
+       title = "Order volume by month (2016-2017)")
+```
+
+```{r}
+# Chunk 5: Temporal Patterns
+
+features_temporal <- transactions %>%
+  mutate(year = year(order_date)) %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    pct_orders_during_sales =
+      n_distinct(sale_id[month(order_date) %in% c(1, 7)]) / n_distinct(sale_id),
+    
+    revenue_y1 = sum(sale_revenue[year == 2016]),
+    revenue_y2 = sum(sale_revenue[year == 2017]),
+    orders_y1  = n_distinct(sale_id[year == 2016]),
+    orders_y2  = n_distinct(sale_id[year == 2017]),
+    
+    revenue_trend =
+      case_when(
+        revenue_y1 < 0.1 ~ -999,
+        revenue_y2 == 0  ~ 0,
+        TRUE             ~ revenue_y2 / revenue_y1
+    ),
+    
+  frequency_trend = 
+    case_when(
+      orders_y1 == 0   ~ -999,
+      orders_y2 == 0   ~ 0,
+      TRUE             ~ orders_y2 / orders_y1
+  )
+)
+
+glimpse(features_temporal)
+```
+
+```{r}
+skim(features_temporal)
+```
+
+```{r}
+# About 25% of customers only ordered on winter or summer sales
+ggplot(features_temporal, aes(x = pct_orders_during_sales)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 0.01,
+                 color = "black") +
+  theme_bw() +
+  labs(x = "Frequency of Orders During Sales (Jan/Jul)",
+       y = "Percentage of customers")
+```
+
+```{r}
+# Chunk 6: Product Preferences
+
+features_product_prefs <- transactions %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    category_diversity = n_distinct(prod_type_1),
+    
+    brand_diversity = n_distinct(prod_brand),
+    
+    n_unique_products = n_distinct(prod_id),
+    
+    pct_web_only_purchases = sum(prod_web_only, na.rm = TRUE) / n()
+  )
+
+glimpse(features_product_prefs)
+```
+
+```{r}
+skim(features_product_prefs)
+```
+
+```{r}
+# Chunk 7: Product focused
+    
+  features_product_details <- transactions %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    avg_size = mean(as.numeric(prod_size), na.rm = TRUE),
+    
+    size_std = if_else(
+      n_distinct(sale_id) == 1,
+      -999,
+      sd(as.numeric(prod_size), na.rm = TRUE)
+    ),
+    
+    # Why not
+    n_sizes           = n_distinct(prod_size),
+    n_colors          = n_distinct(prod_color),
+    
+    # Returns per order
+    returns_per_order = sum(returned_item) / n_distinct(sale_id),
+    
+    # Categories of products
+    women_items_only  = all(prod_type_1 == "women"),
+    men_items_only    = all(prod_type_1 == "men"),
+    children_items_only = all(prod_type_1 %in% c("boys", "girls"))
+  )
+
+glimpse(features_product_details)
+```
+
+```{r}
+skim(features_product_details)
+```
+
+```{r}
+# Chunk 8: Returned items and their shops
+
+features_shop_returns <- transactions %>%
+  filter(returned_item == TRUE) %>%
+  group_by(cust_id) %>%
+  summarise(
+    
+    returned_to_flagship = any(returned_to_shop_id == "m4u2pedciy"),
+    
+    returned_to_high_loyalty_shop = any(returned_to_shop_id %in% 
+      c("akkzhpjani", "uh25rlbuke", "cikg2vp2sy", "mfj35gknoe", 
+        "5tiaacoboa", "cppgicqhti")),
+    
+    n_return_shops = n_distinct(returned_to_shop_id)
+  )
+
+glimpse(features_shop_returns)
+```
+
+```{r}
+skim(features_shop_returns)
+```
+
+```{r}
+# Chunk 9: shoes and their characteristics
+
+features_shoe_types <- transactions %>%
+  group_by(cust_id) %>%
+  summarise(
+    pct_boot        = mean(is_boot),
+    pct_sneaker     = mean(is_sneaker),
+    pct_sandal      = mean(is_sandal),
+    pct_high_shoe   = mean(is_high_shoe),
+    pct_low_shoe    = mean(is_low_shoe),
+    pct_pump        = mean(is_pump),
+    pct_dress_shoe  = mean(is_dress_shoe),
+    pct_sports_shoe = mean(is_sports_shoe),
+    pct_slipper     = mean(is_slipper),
+    pct_ballet_flat = mean(is_ballet_flat),
+    has_velcro       = max(is_velcro),
+    has_comfort_sole = max(is_comfort_sole),
+    has_comfort_wear = max(is_comfort_wear),
+    has_leather      = max(is_leather)
+  )
+
+glimpse(features_shoe_types)
+```
+
+```{r}
+skim(features_shoe_types)
+```
+
+```{r}
+# Final join
+
+features_all <- features_rfm %>%
+  left_join(features_frequency,        by = "cust_id") %>%
+  left_join(features_gaps,             by = "cust_id") %>%
+  left_join(features_discount_returns, by = "cust_id") %>%
+  left_join(features_temporal,         by = "cust_id") %>%
+  left_join(features_product_prefs,    by = "cust_id") %>%
+  left_join(features_product_details,  by = "cust_id") %>%
+  left_join(features_shop_returns,     by = "cust_id") %>%
+  left_join(features_shoe_types,       by = "cust_id") %>%
+  
+  # Impute NAs for non-returners in shop return features
+  mutate(
+    returned_to_flagship          = replace_na(returned_to_flagship, FALSE),
+    returned_to_high_loyalty_shop = replace_na(returned_to_high_loyalty_shop, FALSE),
+    n_return_shops                = replace_na(n_return_shops, 0)
+  ) %>%
+  # Join target
+  left_join(revenue_1819_train, by = "cust_id") %>%
+  rename(target_revenue = revenue_2018_2019)
+
+# Check new features
+glimpse(features_all)
+```
+
+```{r}
+skim(features_all)
+```
+
+```{r}
+# Split train/test
+train_data <- features_all %>% filter(!is.na(target_revenue))
+test_data  <- features_all %>% filter(is.na(target_revenue))
+```
+
+```{r}
+saveRDS(train_data, "eda3_train_data.rds")
+saveRDS(test_data, "eda3_test_data.rds")
+saveRDS(features_all, "eda3_features_all.rds") # Just in case
+write.csv(features_all,"dataset.csv", row.names = FALSE)
+```
+

@@ -1,0 +1,71 @@
+---
+title: "Updated cleaner version of the eda_2_transactions"
+output: html_notebook
+---
+```{r}
+# In this notebook
+# We extract some features from transaction level features
+# We aggregate to customer level features in the next notebook
+```
+
+```{r}
+# Libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+library(skimr)
+library(stringr)
+```
+
+```{r}
+# Import the output from the previous notebook
+transactions <- readRDS("eda1_transactions_output.rds")
+```
+
+```{r}
+glimpse(transactions)
+```
+
+```{r}
+skim(transactions)
+```
+
+```{r}
+# We label item categories at transaction level
+# Later on at customer level we can compute percentages of label presence
+# Example: pct_boot, pct_sneaker, etc...
+# Or simply a binary feature... bought_velcro, bought_comfort_sole, etc...
+
+transactions <- transactions %>%
+  mutate(
+    # For later percentages features at customer level
+    is_boot         = str_detect(prod_type_3, "boot"),
+    is_sneaker      = str_detect(prod_type_3, "sneaker"),
+    is_sandal       = str_detect(prod_type_3, "sandal|flip-flop"),
+    is_high_shoe    = str_detect(prod_type_3, "high shoe"),
+    is_low_shoe     = str_detect(prod_type_3, "low shoe"),
+    is_pump         = str_detect(prod_type_3, "pump"),
+    is_dress_shoe   = str_detect(prod_type_3, "dress shoe"),
+    is_sports_shoe  = str_detect(prod_type_3, "sport"),
+    is_slipper      = str_detect(prod_type_3, "slipper"),
+    is_ballet_flat  = str_detect(prod_type_3, "ballet"),
+    
+    # For later binary features at the customer level
+    is_velcro       = str_detect(prod_clasp, "velcro"),
+    is_comfort_sole = str_detect(prod_comfort_sole, "."),
+    is_comfort_wear = str_detect(prod_comfort_wear, "."),
+    is_leather      = str_detect(prod_material, "leather")
+  )
+```
+
+```{r}
+glimpse(transactions)
+```
+```{r}
+skim(transactions)
+```
+
+```{r}
+saveRDS(transactions, "eda2_transactions_output.rds")
+```

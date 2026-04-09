@@ -1,0 +1,161 @@
+---
+title: "EDA2: Anotating missing values"
+output: html_notebook
+---
+
+```{r}
+# Libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+library(skimr)
+```
+
+```{r}
+# Import the output from the previous notebook
+transactions <- readRDS("eda1_transactions_output.rds")
+```
+
+```{r}
+glimpse(transactions)
+```
+
+
+```{r}
+skim(transactions)
+```
+
+```{r}
+# Number of missing values per column
+missing_values_counts <- transactions %>%
+  summarise(across(everything(), ~ sum(is.na(.x)))) %>%
+  pivot_longer(everything(),
+               names_to = "feature",
+               values_to = "n_missing") %>%
+  arrange(desc(n_missing))
+
+missing_values_counts %>% slice_head(n=5)
+
+# Only one column has true NAs
+# Rest are either zeroes or empty strings
+```
+
+```{r}
+# Number of empty strings per columns
+empty_string_counts <- transactions %>%
+  summarise(across(everything(),
+                   ~ sum(.x == "", na.rm = TRUE))) %>%
+  pivot_longer(everything(),
+               names_to = "feature",
+               values_to = "n_empty_str") %>%
+  filter(n_empty_str > 0) %>%
+  arrange(desc(n_empty_str))
+
+print(empty_string_counts, n = Inf)
+```
+
+```{r}
+glimpse(transactions)
+```
+
+```{r}
+# Replacing empty strings with NA values
+# Except for returned_to_shop_id: empty str means the item was returned
+transactions <- transactions %>%
+  mutate(across(
+    .cols = where(is.character) & !returned_to_shop_id,
+    .fns = ~ replace(.x, .x %in% c("", "NA", "null"), NA),
+    .names = "{.col}"
+  ))
+```
+
+```{r}
+# Number of missing values for the 9 concerned cols
+na_counts <- transactions %>%
+  summarise(across(everything(), ~ sum(is.na(.x)))) %>%
+  pivot_longer(everything(), names_to = "feature", values_to = "n_na") %>%
+  filter(n_na > 0) %>%
+  arrange(desc(n_na))
+
+print(na_counts, n = Inf)
+```
+
+```{r}
+# Percentage of missing values if concerned
+na_percent <- transactions %>%
+  summarise(across(everything(), ~ mean(is.na(.x)))) %>%
+  pivot_longer(everything(),
+               names_to = "feature",
+               values_to = "percent_na") %>%
+  filter(percent_na > 0) %>%
+  mutate(percent_na = percent_na * 100) %>%
+  arrange(desc(percent_na))
+
+print(na_percent, n = Inf)
+```
+
+```{r}
+# Visual
+ggplot(na_percent,
+       aes(x = reorder(feature, percent_na),
+           y = percent_na)) +
+  geom_col(color = "black") +
+  labs(x = "Feature",
+       y = "Percentage of Missing Values (%)",
+       title = "Percentage of Missing Values per Column") +
+  coord_flip() +
+  theme_bw()
+```
+
+```{r}
+# Extract columns having missing values
+cols_with_na <- transactions %>%
+  summarise(across(everything(), ~any(is.na(.)))) %>%
+  pivot_longer(everything()) %>%
+  filter(value) %>%
+  pull(name)
+```
+
+```{r}
+# Then create missing value indicators only for those
+transactions <- transactions %>%
+  mutate(across(all_of(cols_with_na),
+                ~is.na(.), 
+                .names = "{.col}_missing"))
+```
+
+```{r}
+# Names of the categorical columns
+cat_cols <- c("prod_size", "prod_season", "prod_brand", "prod_title",
+              "prod_color", "prod_type_1", "prod_type_3", "prod_type_4", 
+              "prod_type_5", "prod_heel", "prod_material", "prod_print", 
+              "prod_comfort_sole", "prod_comfort_wear", "prod_clasp",
+              "prod_insole")
+```
+
+```{r}
+# We now condirer NA values as a level in each categorical column
+transactions <- transactions %>%
+  mutate(across(all_of(cat_cols),
+                ~replace_na(as.character(.), "NA")))
+```
+
+```{r}
+# Now frequency encode (NA is now just another level)
+transactions <- transactions %>%
+  mutate(across(all_of(cat_cols),
+                ~ {
+                  freq <- table(.) / length(.)
+                  as.numeric(freq[as.character(.)])  # Convert here
+                },
+                .names = "{.col}_freq"))
+```
+
+```{r}
+glimpse(transactions)
+```
+
+```{r}
+saveRDS(transactions, "eda2_transactions_output.rds")
+```

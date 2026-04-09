@@ -1,0 +1,294 @@
+---
+title: "EDA 1: Sale revenues, discounts, returned items"
+output: html_notebook
+---
+
+
+```{r}
+# Libraries
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(lubridate)
+library(skimr)
+```
+
+```{r}
+# Original data
+transactions <- read.csv("transactions_2016_2017.csv")
+train_set <- read.csv("customer_clv_train.csv")
+test_set <- read.csv("customer_clv_test.csv")
+```
+
+```{r}
+# Quick overview
+glimpse(transactions)
+```
+
+```{r}
+# Sale revenue histogram
+ggplot(transactions,aes(sale_revenue)) + 
+  geom_histogram(binwidth = 5, color = "black") +
+  theme_bw()
+```
+
+```{r}
+# Focus on sale_revenue values which are zero of inferior
+transactions %>%
+  filter(sale_revenue <= 0) %>%
+  ggplot(aes(sale_revenue)) +
+  geom_histogram(binwidth = 5, color = "black") +
+  theme_bw() +
+  scale_y_continuous(transform = log1p_trans()) # log(x+1) to avoid zeroes
+```
+
+```{r}
+# Investigating returned_to_shop_id feature
+glimpse(transactions$returned_to_shop_id) #chr
+```
+
+
+```{r}
+unique(nchar(transactions$returned_to_shop_id)) # string is empty or is shop id
+```
+
+
+```{r}
+# Adding a "returned_item" binary feature
+transactions <- transactions %>% 
+  mutate(returned_item = nchar(returned_to_shop_id) == 10)
+```
+
+```{r}
+# Are there sale_revenue <= 0 observations where the sale was not returned?
+transactions %>% 
+  filter(sale_revenue <= 0, returned_item == FALSE) %>%
+  count() # Yes: 16
+```
+
+
+```{r}
+# These rare cases were all applied a discount
+transactions %>% 
+  filter(sale_revenue <= 0, returned_item == FALSE, sale_discount_applied <0) %>%
+  select(sale_revenue,
+         sale_discount_applied,
+         cust_id,
+         order_date) %>%
+  arrange(cust_id, order_date)
+```
+
+```{r}
+# Some returned items still got a positive sale revenue
+transactions %>%
+  filter(returned_item == TRUE, sale_revenue >0) %>%
+  count() # 391
+```
+
+```{r}
+# The immense majority of these 391 items were returned to the same shop
+# This "weird shop" is also where the most returned items were sent to, overall
+# most_common_shop: this shop where most items were returned to
+
+
+most_common_shop <- transactions %>%
+  filter(returned_item == TRUE, sale_revenue > 0) %>%
+  count(returned_to_shop_id, sort = TRUE) %>%
+  slice(1) %>%
+  pull(returned_to_shop_id)
+
+print(most_common_shop)
+```
+
+
+```{r}
+# Visual for the weird cases
+# Meaning: returned items with still a > 0 sale revenue
+
+# Label the most common shop and group the rest
+transactions %>%
+  # Most common shop for return, or another one?
+  filter(returned_item == TRUE, sale_revenue > 0) %>%
+  mutate(shop_group = ifelse(
+    test = returned_to_shop_id == most_common_shop,
+    yes = most_common_shop, #"m4u2pedciy"
+    no = "Other Shops")) %>%
+  # Counting and ploting
+  count(shop_group) %>%
+  ggplot(aes(x = shop_group, y = n)) +
+  geom_col(color = "black") +
+  labs(x = "Shop Group",
+       y = "Count of Returned Sales",
+       title = "Returned Sales by Shop (sale_revenue > 0)") +
+  theme_bw()
+```
+
+```{r}
+# Investigating discounts
+summary(transactions$sale_discount_applied) # Some are positive?
+```
+
+
+```{r}
+transactions %>%
+  select(order_date, sale_revenue, sale_discount_applied) %>%
+  arrange(desc(sale_discount_applied)) %>%
+  head(10) # Only two sales on two consecutive days: not important
+```
+
+
+```{r}
+# Histogram of discount values
+ggplot(transactions, aes(sale_discount_applied)) +
+  geom_histogram(binwidth = 5, color = "black") +
+  theme_bw()
+```
+
+```{r}
+# Adding a "discounted_item" feature
+transactions <- transactions %>%
+  mutate(discounted_item = 
+           sale_discount_applied < 0 | sale_discount_applied == 1
+         )
+# The | sale_discount_applied == 1 : for the two weird cases spotted above
+```
+
+
+```{r}
+# 80% of items got a discount
+ggplot(transactions, aes(x = factor(discounted_item))) +
+  geom_bar(aes(y = after_stat(prop), group = 1), color = "black") +
+  labs(x = "Discounted Sales", y = "Percentage") +
+  scale_y_continuous(labels = percent) + # this is scales::percent here
+  theme_bw()
+```
+
+```{r}
+# Global recap
+
+# Table for sale_revenue
+transactions %>%
+  select(sale_revenue) %>%
+  mutate(sale_cat = case_when(
+    sale_revenue < 0 ~ "Negative_revenue",
+    sale_revenue == 0 ~ "Zero_revenue",
+    sale_revenue > 0 ~ "Positive_revenue"
+  )) %>%
+  select(sale_cat) %>%
+  table() # We got all our 344 212 observations
+```
+
+```{r}
+# Among the zero sale revenue: almost all were returned sales
+transactions %>%
+  filter(sale_revenue == 0) %>%
+  select(returned_item) %>%
+  table() # Only 11 not returned: see below
+```
+
+```{r}
+# The previous 11 observations were all discounted sales
+transactions %>% 
+  filter(sale_revenue == 0,
+         returned_item == FALSE,
+         discounted_item == TRUE) %>% 
+  count()
+```
+
+```{r}
+# Among the positive sale revenue
+transactions %>%
+  filter(sale_revenue > 0) %>%
+  select(returned_item) %>%
+  table() 
+# Only 391 returned items with still a positive revenue
+# These were returned mostly in one single shop
+# No clear explanation but not really important?
+```
+
+```{r}
+# Among the negative sale revenue
+transactions %>%
+  filter(sale_revenue < 0) %>%
+  select(returned_item, discounted_item) %>%
+  table() 
+# Almost all were both discounted and then returned
+# Except for 5 that were only discounted but not returned
+```
+
+```{r}
+# Investigating the weird shop: "m4u2pedciy"
+weird_shop_return <- transactions %>%
+  filter(returned_to_shop_id == "m4u2pedciy") %>%
+  group_by(cust_id) %>%
+  select(cust_id) %>%
+  summarise(n_returned_to_m4u2pedciy = n()) %>%
+  arrange(desc(n_returned_to_m4u2pedciy))
+
+glimpse(weird_shop_return)
+```
+```{r}
+# Customers who returned the most items to m4u2pedciy
+weird_shop_return %>% 
+  arrange(desc(n_returned_to_m4u2pedciy)) %>%
+  head(30)
+```
+
+```{r}
+# In the train part of the data
+# 5646 + 5850 = 11 496 customers returned one item or more to "m4u2pedciy"
+# 5646 churned while 5850 returned during the target period
+# Overall percentage of about 51% of returning customers
+# Maybe interesting considering the global return is 37%
+
+train_set %>%
+  filter(cust_id %in% weird_shop_return$cust_id) %>%
+  mutate(returned = case_when(
+    revenue_2018_2019 <= 0 ~ FALSE,
+    revenue_2018_2019 >0 ~ TRUE
+  )) %>%
+ select(returned) %>%
+  table()
+```
+
+```{r}
+# Number of returned items per shop
+transactions %>%
+  group_by(returned_to_shop_id) %>%
+  count() %>%
+  arrange(desc(n))
+```
+```{r}
+# Cleaning weird sale values before moving on
+transactions <- transactions %>%
+  mutate(sale_revenue = 
+           ifelse(
+             test = returned_item | sale_revenue < 0,
+             yes = 0,
+             no = sale_revenue)
+         )
+
+# Returned + discounted → negative:           set to 0    (2721 cases)
+# Returned + not discounted → already 0:      unchanged   (60818 cases)
+# Returned + positive revenue (weird shop):   set to 0    (391 cases)
+# Non-returned negative (heavy discount):     set to 0    (5 cases)
+```
+
+```{r}
+# Check: no more negative values of sale_revenue
+summary(transactions$sale_revenue)
+```
+```{r}
+# Check: no more returned items with a sale revenue > 0
+# We assumme: returned item means sale_revenue is zero
+transactions %>%
+  filter(returned_item == TRUE,
+         sale_revenue > 0) %>%
+  count()
+```
+
+```{r}
+# For later usage
+saveRDS(transactions,"eda1_transactions_output.rds")
+```
+
