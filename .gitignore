@@ -19,7 +19,7 @@ models/*.pkl
 models/*.joblib
 
 # submissions
-submissions/*.csv
+#submissions/*.csv
 
 # catboost logs
 catboost_info/
