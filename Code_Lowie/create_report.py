@@ -1,4 +1,9 @@
-from docx import Document
+import subprocess, sys
+try:
+    from docx import Document
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-docx", "-q"])
+    from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
