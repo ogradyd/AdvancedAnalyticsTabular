@@ -184,7 +184,7 @@ add_para("Results: Log loss improved 0.6013 → 0.5758. AUC unchanged at 0.72. "
 add_heading("2.3  Tweedie Regression  (Discarded)", 2)
 add_para("Idea: Replace the two-stage architecture with a single Tweedie distribution model, "
          "which naturally handles zero-inflated positive data.")
-add_para("Why it failed: Tweedie regression never predicts exactly 0. The ~80% of churned customers "
+add_para("Why it failed: Tweedie regression never predicts exactly 0. The 63.4% of churned customers "
          "all receive small positive predictions, systematically inflating MAE.")
 add_para("Results: MAE 69.88 — significantly worse. Discarded entirely.", bold_prefix="Results:")
 
@@ -249,14 +249,14 @@ add_heading("2.7  P_alive Soft Scaling  (Discarded)", 2)
 add_para("Idea: prediction = p_alive × E[revenue | customer is active]. Train revenue model on "
          "returning customers only, predict for all, multiply by p_alive — mirrors BG/NBD + "
          "Gamma-Gamma but with a stronger ML revenue estimator.")
-add_para("Results: Worse than single-stage ensemble.", bold_prefix="Results:")
+add_para("Results: OOF MAE 109.46 — significantly worse than ensemble. Discarded.", bold_prefix="Results:")
 add_para("Why it failed: p_alive is already one of the 82 input features. The trees learned the "
          "optimal relationship between p_alive and the target implicitly. Multiplying by it again "
          "adds distortion. The conditional model (trained only on returners) also cannot learn "
          "when to predict near-zero.")
 
 # 2.8
-add_heading("2.8  Optuna Hyperparameter Optimisation  (Current)", 2)
+add_heading("2.8  Optuna Hyperparameter Optimisation", 2)
 add_para("Motivation: RandomizedSearchCV samples blindly. Optuna's TPE (Tree-structured Parzen "
          "Estimator) sampler learns which hyperparameter regions produce low loss and focuses "
          "exploration there — far more efficient with 8+ interacting parameters.")
@@ -265,24 +265,57 @@ add_bullet("60 trials for LightGBM and XGBoost, 40 for CatBoost (slower per tria
 add_bullet("3-fold CV inside Optuna (fast proxy); full 5-fold OOF with winning params")
 add_bullet("Wider search ranges: learning_rate 0.005–0.15 (log), n_estimators 300–3000, "
            "num_leaves 20–300, reg_alpha/lambda 1e-8 to 10 (log), XGBoost adds gamma parameter")
-add_para("Results: MAE 62.45 / Spearman 0.3729 (OOF). All three algorithms converged to the same "
-         "score — LightGBM 62.58, XGBoost 62.73, CatBoost 62.50, ensemble 62.45. Three independent "
-         "algorithms returning the same MAE despite very different hyperparameters is a diagnostic "
-         "signal: the bottleneck is not hyperparameters, it is the information available in the "
-         "features. The model cannot cleanly separate churners from returners because their "
-         "feature distributions overlap. More tuning will not close this gap.", bold_prefix="Results:")
+add_para("Best params found:", space_after=3)
+add_bullet("LightGBM: n_estimators=1441, lr=0.00877, num_leaves=35, min_child_samples=77")
+add_bullet("XGBoost: n_estimators=466, lr=0.01059, max_depth=6, min_child_weight=20")
+add_bullet("CatBoost: iterations=1761, lr=0.00820, depth=8")
+add_bullet("Ensemble weights (Nelder-Mead optimised): LGB=0.202, XGB=0.256, CAT=0.542")
+add_para("Results: OOF MAE 62.42 / Val MAE 62.37 / Val Spearman 0.3706. All three algorithms "
+         "converged to essentially the same OOF score (LGB 62.56, XGB 62.57, CAT 62.46). "
+         "Three independent algorithms returning the same MAE despite very different hyperparameters "
+         "is a diagnostic signal: the bottleneck is not hyperparameters, it is the information "
+         "available in the features.", bold_prefix="Results:")
+add_para("BG/NBD blend: Optimal alpha = 0.0 — BG/NBD adds nothing on top of the ML ensemble. "
+         "The 8 BG/NBD features are already inside the 82-feature input space, so the trees "
+         "have already learned the BG/NBD signal implicitly.")
 
 # 2.9
-add_heading("2.9  Two-Stage ML: Churn Classifier × Conditional Revenue  (Current)", 2)
+add_heading("2.9  Kevin's EDA Features  (Teammate Contribution)", 2)
+add_para("Source: Teammate Kevin (colin0019) pushed 4 R EDA notebooks analysing the transaction "
+         "data from different angles. Three groups of features not yet in the Python pipeline "
+         "were identified and integrated into 02_feature_engineering.ipynb.")
+add_para("9 new features added across 3 groups:", space_after=3)
+add_bullet("Sales timing (3 features): pct_orders_during_sales (fraction of orders placed in "
+           "January or July — ~25% of customers only shop during sale months), revenue_trend "
+           "(revenue_2017/revenue_2016 ratio; −999 sentinel if no 2016 baseline), "
+           "frequency_trend (orders_2017/orders_2016 ratio).",
+           bold_prefix="Sales timing (3 features):")
+add_bullet("Gender/product segment (3 features): women_items_only, men_items_only, "
+           "children_items_only — flags whether all items a customer bought belonged to a single "
+           "gender segment. Distinguishes personal shoppers from gift buyers.",
+           bold_prefix="Gender/product segment (3 features):")
+add_bullet("Return shop behaviour (3 features): returned_to_flagship (ever returned to the "
+           "main flagship store ID), returned_to_high_loyalty_shop (returned to any of 6 shops "
+           "with above-average repeat purchase rates), n_return_shops (number of distinct return "
+           "shop IDs used).",
+           bold_prefix="Return shop behaviour (3 features):")
+add_para("Total features: 74 + 9 new = 83 in v2; 83 + 8 BG/NBD = 90 in v3 "
+         "(customer_features_v3.csv).")
+add_para("Results: Val MAE 62.37 / Val Spearman 0.3706 — marginal MAE improvement (~0.08) "
+         "over the pre-Kevin ensemble (62.45). Feature ceiling confirmed: more features "
+         "continue to yield diminishing returns.", bold_prefix="Results:")
+
+# 2.10
+add_heading("2.10  Two-Stage ML: Churn Classifier × Conditional Revenue", 2)
 add_para("Root cause: 63.4% of training customers have exactly €0 revenue yet all single-stage "
          "models predict a small positive number for nearly all of them. In log1p space the "
          "churner target (log1p(0) = 0) and a low-revenue returner target sit very close "
          "together — the decision boundary is inherently blurry. All three Optuna-tuned "
-         "algorithms converging to MAE ≈ 62.45 confirmed this is a feature-space ceiling, "
+         "algorithms converging to OOF MAE ≈ 62.42 confirmed this is a feature-space ceiling, "
          "not a hyperparameter problem.")
 add_para("Architecture:", space_after=3)
 add_bullet("Stage 1 — Churn classifier: LightGBM binary classifier trained on all customers, "
-           "all 80+ features. Target: is_returner = (revenue_2018_2019 > 0). "
+           "all 90 features. Target: is_returner = (revenue_2018_2019 > 0). "
            "Output: P(customer returns in 2018–2019).",
            bold_prefix="Stage 1 — Churn classifier:")
 add_bullet("Stage 2 — Conditional regressor: Optuna-tuned LightGBM regressor trained on "
@@ -291,51 +324,75 @@ add_bullet("Stage 2 — Conditional regressor: Optuna-tuned LightGBM regressor t
            bold_prefix="Stage 2 — Conditional regressor:")
 add_bullet("Combination: prediction = P(return) × conditional_revenue.",
            bold_prefix="Combination:")
-add_bullet("Optional threshold: an OOF-optimised revenue threshold that zeros out any "
-           "residual predictions below the break-even level, further reducing churner error.",
+add_bullet("Optional threshold: an OOF-optimised revenue threshold (77.1€) that zeros out "
+           "residual predictions below the break-even level.",
            bold_prefix="Optional threshold:")
 
 add_para("Comparison to original two-stage (section 2.1):", space_after=4)
 make_table(
-    headers=["Dimension", "Original two-stage (2.1)", "New two-stage (2.9)"],
+    headers=["Dimension", "Original two-stage (2.1)", "New two-stage (2.10)"],
     col_widths=[1.8, 2.7, 2.5],
     rows=[
         ["Classifier ensemble",   "LGB + XGB + CatBoost (3 models)",       "LGB only"],
         ["Tuning metric",         "AUC — discriminative, not MAE-aligned",  "Binary crossentropy + MAE loss"],
         ["Prob. calibration",     "Isotonic regression on 20% cal set",     "None (raw probabilities)"],
-        ["Class imbalance",       "Explicit scale_pos_weight",              "Not needed (soft ×, not threshold)"],
         ["Decision rule",         "Hard: P > threshold → predict, else 0", "Soft: P × conditional_revenue"],
-        ["Feature set",           "customer_features.csv (~51 features)",  "customer_features_v3.csv (82 features)"],
-        ["Stage integration",     "Separate notebooks, separate splits —\ncombined MAE never properly measured",
-                                  "Both stages inside same 5-fold OOF —\ncombined MAE directly evaluated"],
-        ["Evaluation",            "AUC (classifier) + MAE (regressor) separately",
-                                  "Single OOF MAE for P × revenue product"],
+        ["Feature set",           "~51 features",                          "90 features (v3)"],
+        ["Stage integration",     "Separate notebooks, separate splits",   "Both stages inside same 5-fold OOF"],
+        ["Evaluation",            "AUC + MAE separately",                  "Single OOF MAE for combined product"],
     ]
 )
-add_para("Key architectural improvement: The original two-stage never measured the end-to-end "
-         "MAE of the combined P × revenue prediction in a cross-validated way, because the "
-         "classifier and regressor lived in separate notebooks with separate train/val splits. "
-         "Running both stages inside the same OOF fold gives a single honest MAE that is "
-         "directly comparable to the single-stage baseline.")
-add_para("Results: Pending run.", bold_prefix="Results:")
+add_para("OOF results:", space_after=3)
+add_bullet("Two-stage ML: OOF MAE 71.49 / Spearman 0.3985 — better Spearman than ensemble (0.3784) "
+           "but much worse MAE (71.49 vs 62.42).")
+add_bullet("Two-stage + threshold (77.1€): OOF MAE 62.82 / Spearman 0.3937 — threshold helps "
+           "but still worse than pure ensemble on MAE.")
+add_para("Why the trade-off: P(return) < 1 for every customer, so multiplying conditional_revenue "
+         "by a probability always scales predictions down. This compresses the revenue magnitude "
+         "for true returners, hurting MAE, but the classifier correctly re-orders customers "
+         "(churners rank lower, high-value returners rank higher) — hence better Spearman.")
+add_para("Decision: USE_TWOSTAGE=False. Pure ML ensemble retained as the MAE-optimal base.")
+
+# 2.11
+add_heading("2.11  Two-Stage × ML Ensemble Blend  (Final Approach)", 2)
+add_para("Insight: The two-stage has better Spearman (ranks customers more correctly) while the "
+         "ML ensemble has better MAE (better absolute magnitude). A blend of the two can "
+         "harvest both strengths: final = β × two_stage + (1−β) × ml_ensemble.")
+add_para("Optimisation: Sweep β ∈ [0, 1] on OOF predictions. The MAE curve is strictly "
+         "monotone increasing in β — the optimizer finds β*=0 (pure ML ensemble minimises MAE). "
+         "However, the Spearman curve reveals a sharp cliff: at β≈0.04 Spearman jumps from "
+         "0.3784 to ~0.401 on OOF, then stays roughly flat up to β≈0.6. Even 4% two-stage "
+         "weight dramatically re-orders customers near the churn boundary — where the Spearman "
+         "ranking matters most — at negligible MAE cost.")
+add_para("Decision: Manually fix β=0.04. The MAE-optimal β (0) ignores Spearman entirely; "
+         "at β=0.04 we gain ~+0.023 Spearman for only +0.03 OOF MAE.", bold_prefix="Decision:")
+add_para("Val results (held-out 20%):", space_after=3)
+add_bullet("Two-stage × ML blend (β=0.04): Val MAE 62.69 / Val Spearman 0.4032")
+add_bullet("vs. pure ML ensemble: Val MAE 62.37 / Val Spearman 0.3706")
+add_bullet("Cost: +0.32 MAE. Gain: +0.033 Spearman (Spearman now within 0.007 of benchmark 0.41)")
+add_para("This is the final submission strategy. USE_TS_ML_BLEND=True saved to models/blend_beta.pkl "
+         "and picked up by 05_test_prediction.ipynb → submission_v7_ts_ml_blend_b0.040.csv.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. RESULTS SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 add_heading("3. Results Summary", 1)
+add_para("All MAE/Spearman figures are on the held-out 20% validation set unless noted as OOF.", space_after=4)
 make_table(
     headers=["Approach", "Val MAE", "Spearman", "Notes"],
-    col_widths=[2.8, 0.9, 0.9, 2.4],
+    col_widths=[2.9, 0.85, 0.9, 2.35],
     rows=[
-        ["Two-stage: ML churn + revenue",       "62.65",  "0.3964", "Baseline"],
-        ["+ Probability calibration",           "62.50",  "0.4002", "IsotonicRegression"],
-        ["Tweedie regression",                  "69.88",  "—",      "Discarded: never predicts 0"],
-        ["Single-stage + 82 features",          "~62.50", "~0.40",  "BG/NBD features included"],
-        ["+ BG/NBD blend (alpha tuned)",        "~62.50", "~0.40",  "Minimal alpha improvement"],
-        ["P_alive soft scaling",                "worse",  "—",      "Discarded: p_alive already a feature"],
-        ["Optuna HPO (LGB+XGB+CAT ensemble)",   "62.45",  "0.3729", "All 3 algorithms converged → feature ceiling"],
-        ["Two-stage ML (clf × regressor)",      "TBD",    "TBD",    "Run pending"],
-        ["Professor benchmark",                 "61.146", "0.41",   "Target to beat"],
+        ["Two-stage: ML churn + revenue",            "62.65",  "0.3964", "Baseline (section 2.1)"],
+        ["+ Probability calibration",                "62.50",  "0.4002", "IsotonicRegression (2.2)"],
+        ["Tweedie regression",                       "69.88",  "—",      "Discarded: never predicts 0 (2.3)"],
+        ["Single-stage + 82 features (BG/NBD)",      "~62.50", "~0.40",  "BG/NBD features added (2.5–2.6)"],
+        ["P_alive soft scaling",                     "worse",  "—",      "Discarded: p_alive already a feature (2.7)"],
+        ["Optuna HPO — ML ensemble (90 features)",   "62.37",  "0.3706", "OOF MAE 62.42; all 3 algorithms converged (2.8)"],
+        ["+ Kevin's EDA features (9 new)",           "62.37",  "0.3706", "−0.08 MAE; feature ceiling confirmed (2.9)"],
+        ["Two-stage ML (clf × regressor)",           "71.55",  "0.4009", "Better Spearman; worse MAE (2.10)"],
+        ["Two-stage + threshold (77€)",              "62.92",  "0.3937", "Discarded: ML ensemble still better (2.10)"],
+        ["Two-stage × ML blend β=0.04  ← FINAL",    "62.69",  "0.4032", "0.007 below benchmark Spearman (2.11)"],
+        ["Professor benchmark",                      "61.146", "0.41",   "Target"],
     ]
 )
 
@@ -359,12 +416,15 @@ make_table(
         ["X_val_ret undefined in notebook 06",
          "Variable renamed during refactor",
          "Replaced with X_shap throughout cells 7–9"],
-        ["FileNotFoundError for feature_cols_ml.pkl",
-         "Running old main-branch notebook instead of worktree version",
-         "Switch to correct worktree notebook path"],
-        ["plot_probability_alive_matrix TypeError",
-         "lifetimes creates its own axes; ax= kwarg forwarded to imshow",
-         "Remove ax=ax; let lifetimes manage its own figure"],
+        ["OSError: Too many levels of symbolic links",
+         "data/, models/, submissions/ were git-tracked\nself-referential symlinks",
+         "rm symlinks; mkdir -p data models submissions;\nre-add data files directly"],
+        ["NameError: 'idx' not defined in notebook 06",
+         "f-strings inside a list literal are evaluated\nwhen the list is built, before the for loop runs",
+         "Moved the f-string title inside the loop body\nso idx is already assigned"],
+        ["Notebook 06 reporting stale MAE/Spearman",
+         "Error-analysis cell loaded USE_BLEND but not\nUSE_TS_ML_BLEND or blend_beta",
+         "Updated setup + error_residuals cells to load\nboth flags and compute val_pred_ts_blend"],
     ]
 )
 
@@ -395,6 +455,14 @@ add_para("Why Nelder-Mead with softmax?", bold_prefix="Why Nelder-Mead with soft
 add_para("Constrained optimisation (weights sum to 1, all positive) becomes unconstrained "
          "via softmax over logits. Nelder-Mead is derivative-free and robust to the non-smooth MAE objective.")
 
+add_para("Why manually fix β=0.04 instead of the MAE-optimal β=0?",
+         bold_prefix="Why manually fix β=0.04 instead of the MAE-optimal β=0?")
+add_para("The competition has two metrics: MAE and Spearman. The optimizer finds β=0 because it "
+         "minimises only MAE. The Spearman sweep reveals a sharp non-linear cliff: even 4% "
+         "two-stage weight re-orders borderline customers (where Spearman sensitivity is highest) "
+         "at almost no MAE cost. A β that Pareto-dominates on the combined objective space is "
+         "the right choice when both metrics are evaluated.")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 6. NOTEBOOK STRUCTURE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -404,18 +472,21 @@ make_table(
     col_widths=[2.8, 4.2],
     rows=[
         ["02_feature_engineering.ipynb",
-         "RFM + quarterly + recency_normalized + target encoding → customer_features_v2.csv"],
+         "RFM + quarterly + recency_normalized + target encoding + Kevin's 9 EDA features "
+         "→ customer_features_v2.csv (83 features)"],
         ["03_bgnbd_model.ipynb",
-         "BG/NBD fit, p_alive extraction, merge → customer_features_v3.csv + bgf/ggf models"],
+         "BG/NBD fit, p_alive extraction, merge → customer_features_v3.csv (90 features) + bgf/ggf models"],
         ["03_churn_model.ipynb",
          "Old ML churn classifier (kept for reference, not in active pipeline)"],
         ["04_revenue_model.ipynb",
-         "Optuna HPO, 5-fold OOF, Nelder-Mead ensemble, soft scaling comparison, two-stage ML "
-         "(classifier × regressor, OOF-integrated), retrain all models, save"],
+         "Optuna HPO, 5-fold OOF, Nelder-Mead ensemble, soft scaling comparison, "
+         "two-stage ML OOF, β sweep blend optimisation, retrain all models, save"],
         ["05_test_prediction.ipynb",
-         "Load best models, predict test set → submission_v7_*.csv"],
+         "Load best models, apply β=0.04 blend strategy, predict test set "
+         "→ submission_v7_ts_ml_blend_b0.040.csv"],
         ["06_interpretability.ipynb",
-         "SHAP beeswarm, p_alive dependence plot, quarterly importance, error analysis"],
+         "SHAP beeswarm, p_alive dependence plot, quarterly importance, "
+         "waterfall plots, error analysis (applies blend strategy)"],
     ]
 )
 
@@ -436,7 +507,8 @@ lessons = [
      "p_alive was already a feature. Multiplying by it again added distortion rather than signal."),
     ("BG/NBD is best as a feature, not a replacement",
      "The probabilistic model provides valuable p_alive and CLV estimates that tree models "
-     "can use contextually. Using BG/NBD alone loses the 74 engineered features."),
+     "can use contextually. Using BG/NBD alone loses the 74+ engineered features. "
+     "BG/NBD blend alpha optimised to 0.0, confirming the ML ensemble fully subsumes it."),
     ("MAE in log-space ≠ MAE in original space",
      "Training on log1p(revenue) with MAE loss minimises median log1p error, which approximately "
      "minimises original-space MAE. Far better than raw revenue (where leaf medians are mostly 0)."),
@@ -452,6 +524,15 @@ lessons = [
      "so the combined P × revenue MAE was never properly measured. Only by running both stages "
      "inside the same OOF fold can the combined prediction be compared apples-to-apples "
      "against a single-stage baseline."),
+    ("MAE-optimal ≠ jointly optimal when two metrics are evaluated",
+     "Optimising β solely for MAE finds β=0 (pure ML ensemble). The Spearman sweep reveals "
+     "a sharp non-linear cliff at β=0.04: Spearman jumps +0.023 at almost no MAE cost. "
+     "When both MAE and Spearman are evaluated, the single-metric optimum is not the right choice."),
+    ("OOF Spearman ≠ val Spearman — but the direction is consistent",
+     "OOF Spearman for the pure ML ensemble was 0.3784; on the held-out val set it was 0.3706. "
+     "The gap (~0.008) is expected — OOF covers 93k training customers while the val set covers "
+     "23k held-out customers. The blend improvement (+0.033 Spearman on val) matched the "
+     "OOF prediction direction, confirming the sweep chart was reliable."),
 ]
 
 for i, (title, body) in enumerate(lessons, 1):
@@ -470,7 +551,6 @@ for i, (title, body) in enumerate(lessons, 1):
 # ══════════════════════════════════════════════════════════════════════════════
 out = ("/Users/lowievanlitsenborg/Library/Mobile Documents/"
        "com~apple~CloudDocs/lessen/1e Ma/Advanced Analytics/Assignments/1/"
-       "AdvancedAnalyticsTabular/.claude/worktrees/laughing-swartz/"
-       "Code_Lowie/Development_Report.docx")
+       "AdvancedAnalyticsTabular/Code_Lowie/Development_Report.docx")
 doc.save(out)
 print(f"Saved: {out}")
