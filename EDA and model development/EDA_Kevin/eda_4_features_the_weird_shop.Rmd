@@ -1,0 +1,77 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+# Load data
+transactions <- readRDS("eda1_transactions_output.rds")
+train_data <- readRDS("eda3_train_data.rds")
+```
+
+
+```{r}
+# Get returner status per customer
+customer_returner_status <- train_data %>%
+  mutate(is_returner = target_revenue > 0) %>%
+  select(cust_id, is_returner)
+```
+
+
+```{r}
+# Filter transactions to only train customers first
+train_customer_ids <- customer_returner_status$cust_id
+
+shop_analysis <- transactions %>%
+  filter(returned_item == TRUE, cust_id %in% train_customer_ids) %>%  
+  distinct(cust_id, returned_to_shop_id) %>%
+  left_join(customer_returner_status, by = "cust_id") %>%
+  group_by(returned_to_shop_id) %>%
+  summarise(
+    n_customers = n(),
+    n_returners = sum(is_returner),  # No na.rm needed now
+    n_churners = sum(!is_returner),
+    pct_returners = n_returners / n_customers * 100
+  ) %>%
+  filter(n_customers >= 10) %>%
+  arrange(desc(n_customers),desc(pct_returners))
+```
+
+
+```{r}
+# View top shops
+print(shop_analysis, n = 20)
+```
+
+
+```{r}
+# Bar plot
+shop_analysis %>%
+  top_n(20, n_customers) %>%  # Top 20 by volume
+  mutate(returned_to_shop_id = fct_reorder(returned_to_shop_id, pct_returners)) %>%
+  ggplot(aes(x = returned_to_shop_id, y = pct_returners)) +
+  geom_col(aes(fill = n_customers), color = "black") +
+  geom_hline(yintercept = 37, linetype = "dashed", color = "red", linewidth = 1) +
+  annotate("text", x = 5, y = 39, label = "Overall: 37%", color = "red") +
+  coord_flip() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  theme_bw() +
+  labs(
+    x = "Return Shop ID",
+    y = "% Customers Who Returned in Y3-Y4",
+    fill = "# Customers",
+    title = "Return Rate by Shop",
+    subtitle = "Shops with 10+ customers, sorted by return rate"
+  )
+```
+
+```{r}
+print(sum(shop_analysis$n_returners))
+print(mean(shop_analysis$pct_returners))
+```
+
